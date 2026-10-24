@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Farming Robot BLE Controller</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:20px;background:#0b1220;color:#edf3f8;font:16px system-ui,Arial}
+main{max-width:900px;margin:auto}h1{color:#73e6ad}.panel{background:#151f30;border:1px solid #2c3b51;border-radius:14px;padding:18px;margin:16px 0}
+button,input{font:inherit;border-radius:9px;border:1px solid #40516a;padding:12px;margin:4px}button{background:#176b49;color:white;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}.danger{background:#a72e3a}.neutral{background:#334155}
+.row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}.row button{min-width:110px}
+input{background:#0b1220;color:white;max-width:100%}#state{color:#ffd166}
+#log{height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#05090f;color:#9affb7;padding:14px;border-radius:9px;font:14px/1.55 ui-monospace,monospace}
+small{color:#bdc9d8}
+</style></head><body><main>
+<h1>🌱 Farming Robot</h1><p>Browser BLE controller and terminal for Windows and Ubuntu.</p>
+<section class="panel"><h2>Bluetooth connection</h2><p id="state">Disconnected</p>
+<div class="row"><button id="connect">Connect FARMINGROBOT</button><button id="disconnect" class="danger" disabled>Disconnect</button></div>
+<small>Use a Web Bluetooth-compatible browser. Open from HTTPS or localhost.</small></section>
+<section class="panel"><h2>Manual drive</h2>
+<div class="row"><button data-cmd="FORWARD">⬆ Forward</button></div>
+<div class="row"><button data-cmd="LEFT">⬅ Left</button><button data-cmd="STOP" class="danger">■ STOP</button><button data-cmd="RIGHT">Right ➡</button></div>
+<div class="row"><button data-cmd="BACKWARD">⬇ Backward</button></div>
+<p><small>Test with wheels lifted. Use STOP to stop the motors.</small></p></section>
+<section class="panel"><h2>Robot functions</h2>
+<div class="row"><button data-cmd="STATUS" class="neutral">Get status</button><button data-cmd="MOISTURE_CHECK" class="neutral">Check moisture</button><button data-cmd="WATER_ON">Pump ON</button><button data-cmd="WATER_OFF" class="danger">Pump OFF</button></div>
+<div class="row"><button data-cmd="AUTO_START">Start basic auto</button><button data-cmd="AUTO_STOP" class="danger">Stop auto</button></div>
+<p><small>Basic auto is a demonstration, not plant mapping or route navigation.</small></p></section>
+<section class="panel"><h2>Send custom command</h2><form id="form" class="row"><input id="cmd" placeholder="Example: STATUS" autocomplete="off" required><button type="submit">Send</button></form><button id="clear" class="neutral">Clear terminal</button></section>
+<section class="panel"><h2>Bluetooth terminal</h2><div id="log" role="log" aria-live="polite"></div></section>
+</main>
+<script>
+(() => {
+ const SERVICE="0000ffe0-0000-1000-8000-00805f9b34fb";
+ const CHAR="0000ffe1-0000-1000-8000-00805f9b34fb";
+ const $=id=>document.getElementById(id);
+ let device=null, tx=null, decoder=new TextDecoder(), rxBuffer="";
+ function log(s){const el=$("log");el.textContent+=`[${new Date().toLocaleTimeString()}] ${s}\\n`;el.scrollTop=el.scrollHeight;}
+ function state(connected,label){$("state").textContent=label;$("connect").disabled=connected;$("disconnect").disabled=!connected;
+  document.querySelectorAll("[data-cmd]").forEach(b=>b.disabled=!connected);$("form").querySelector("button").disabled=!connected;}
+ function disconnected(){tx=null;state(false,"Disconnected");log("Bluetooth disconnected.");}
+ async function connect(){
+  if(!navigator.bluetooth){log("Web Bluetooth unavailable. Try Chrome/Edge and localhost/HTTPS.");return;}
+  try{
+   device=await navigator.bluetooth.requestDevice({filters:[{services:[SERVICE]}]});
+   device.addEventListener("gattserverdisconnected",disconnected);
+   $("state").textContent="Connecting…";
+   const server=await device.gatt.connect(), service=await server.getPrimaryService(SERVICE);
+   tx=await service.getCharacteristic(CHAR);
+   if(tx.properties.notify||tx.properties.indicate){
+    await tx.startNotifications();
+    tx.addEventListener("characteristicvaluechanged",e=>{
+     rxBuffer+=decoder.decode(e.target.value,{stream:true});
+     const lines=rxBuffer.split(/\\r?\\n/);rxBuffer=lines.pop()||"";
+     lines.forEach(line=>{if(line)log("ROBOT: "+line);});
+     if(rxBuffer.length>500){log("ROBOT: "+rxBuffer);rxBuffer="";}
+    });
+   }else log("Connected, but this characteristic has no notifications.");
+   state(true,"Connected: "+(device.name||"BLE device"));log("Connected. Sending STATUS.");await send("STATUS");
+  }catch(e){log("Connection error: "+e.message);state(false,"Connection failed / disconnected");}
+ }
+ async function send(s){
+  if(!tx||!device?.gatt?.connected){log("ERROR: connect first.");return;}
+  s=s.trim();if(!s)return;
+  try{const bytes=new TextEncoder().encode(s+"\\n");
+   if(tx.properties.write)await tx.writeValueWithResponse(bytes);
+   else if(tx.properties.writeWithoutResponse)await tx.writeValueWithoutResponse(bytes);
+   else throw new Error("BLE characteristic is not writable");
+   log("SENT: "+s);
+  }catch(e){log("Send error: "+e.message);}
+ }
+ $("connect").addEventListener("click",connect);
+ $("disconnect").addEventListener("click",()=>{if(device?.gatt?.connected)device.gatt.disconnect();});
+ document.querySelectorAll("[data-cmd]").forEach(b=>b.addEventListener("click",()=>send(b.dataset.cmd)));
+ $("form").addEventListener("submit",e=>{e.preventDefault();send($("cmd").value);$("cmd").value="";});
+ $("clear").addEventListener("click",()=>$("log").textContent="");
+ state(false,"Disconnected");log("Ready. Connect to FARMINGROBOT.");
+})();
+</script></body></html>
